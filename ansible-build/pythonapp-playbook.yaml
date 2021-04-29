@@ -1,0 +1,80 @@
+
+- name: Pull latest Ubuntu Image 
+  hosts: localhost
+  tasks:
+  - name: Pull Ubuntu Image
+    docker_container:
+      name: "ubuntu-base"
+      image: "ubuntu:bionic"
+      state: started
+      command: tail -f /dev/null
+  - name: Add Ubuntu Image to Ansible Hosts
+    add_host:
+      name: "ubuntu-base"
+      ansible_connection: docker
+      ansible_ssh_user: root
+
+- name: Configure ubuntu Base Image for running python app
+  hosts: "ubuntu-base"
+  gather_facts: false
+  tasks:
+    - name: Install Python3
+      raw: > 
+        apt-get update && apt-get install -y \
+        python3 python3-pip \
+        fonts-liberation libappindicator3-1 libasound2 libatk-bridge2.0-0 \
+        libnspr4 libnss3 lsb-release xdg-utils libxss1 libdbus-glib-1-2 \
+        curl unzip wget \
+        xvfb
+    
+    - name: Install Rsync
+      apt:
+        name: rsync
+
+    - name: Install Firefox + Selenium webdriver
+      raw: >
+        GECKODRIVER_VERSION=`curl https://github.com/mozilla/geckodriver/releases/latest | grep -Po 'v[0-9]+.[0-9]+.[0-9]+'` && \
+        wget https://github.com/mozilla/geckodriver/releases/download/$GECKODRIVER_VERSION/geckodriver-$GECKODRIVER_VERSION-linux64.tar.gz && \
+        tar -zxf geckodriver-$GECKODRIVER_VERSION-linux64.tar.gz -C /usr/local/bin && \
+        chmod +x /usr/local/bin/geckodriver && \
+        rm geckodriver-$GECKODRIVER_VERSION-linux64.tar.gz && \
+        FIREFOX_SETUP=firefox-setup.tar.bz2 && \
+        apt-get purge firefox && \
+        wget -O $FIREFOX_SETUP "https://download.mozilla.org/?product=firefox-latest&os=linux64" && \
+        tar xjf $FIREFOX_SETUP -C /opt/ && \
+        ln -s /opt/firefox/firefox /usr/bin/firefox && \
+        rm $FIREFOX_SETUP
+    
+    - name: Install Dependencies
+      raw: >
+        pip3 install selenium && \
+        pip3 install urllib3 && \
+        pip3 install pyvirtualdisplay
+      
+    - name: Copy local configuration Files to Ubuntu Container
+      synchronize:
+        src: ./app/
+        dest: /usr/src/app
+    
+    - name: Run App 
+      raw: >
+        python3 /usr/src/app/webscrape.py urls
+
+    - name: Run Webserver
+      raw: >
+        cd /usr/src/app/screenshots &&  python3 -m http.server 8080 &
+    
+- name: Snapshot base image to create newly configured image
+  hosts: localhost
+  tasks:
+    - name: Commit Docker image
+      command: docker commit "ubuntu-base" "python-app-demo"
+
+- name: Clean Up Docker Containers
+  hosts: localhost
+  tasks:
+    - name: Remove Running Base Image
+      docker_container:
+        name: ubuntu-base
+        state: absent
+        force_kill: yes
